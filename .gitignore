@@ -1,0 +1,17 @@
+.idea/
+.vs/
+.vscode/
+
+build/
+build-vulkan/
+build-d3d12/
+
+# Generated Doxygen html - built by CI and published to GitHub Pages
+# (https://bredauniversitygames.github.io/buz/); run docs/generate_docs.bat to
+# preview it locally.
+docs/html/
+dist/
+
+# Games packaged with the package script
+package/
+build-web/
