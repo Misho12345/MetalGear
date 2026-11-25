@@ -19,3 +19,6 @@ build-web/
 
 # Python bytecode (tools/student_patch)
 __pycache__/
+
+content/metal_gear/dock/
+content/metal_gear/characters/
