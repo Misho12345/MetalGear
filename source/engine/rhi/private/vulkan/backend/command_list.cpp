@@ -7,6 +7,7 @@
 #include "vulkan/backend/pipeline.h"
 #include "vulkan/descriptor_heap.h"
 
+#include <algorithm>
 #include <cstring>
 #include <optional>
 
@@ -57,6 +58,18 @@ namespace buz::rhi
 	}
 
 	//--------------------------------------------------------------
+	bool command_list::set_shader_data(std::span<const std::byte> data)
+	{
+		return m_native->set_data(data_slot::shader_data, data);
+	}
+
+	//--------------------------------------------------------------
+	bool command_list::set_frame_data(std::span<const std::byte> data)
+	{
+		return m_native->set_data(data_slot::frame_data, data);
+	}
+
+	//--------------------------------------------------------------
 	void command_list::set_texture(const gpu_texture& sampled_texture)
 	{
 		m_native->set_texture(sampled_texture.get_native());
@@ -91,6 +104,8 @@ namespace buz::rhi
 		: m_owner(nullptr)
 		, m_command_buffer(VK_NULL_HANDLE)
 		, m_layout(VK_NULL_HANDLE)
+		, m_data_offsets{}
+		, m_has_data{}
 	{
 	}
 
@@ -101,6 +116,8 @@ namespace buz::rhi
 		m_command_buffer = command_buffer;
 		m_layout = VK_NULL_HANDLE;
 		m_stats = {};
+		std::ranges::fill(m_data_offsets, 0u);
+		std::ranges::fill(m_has_data, false);
 	}
 
 	//--------------------------------------------------------------
@@ -113,6 +130,23 @@ namespace buz::rhi
 		// Set 1: the pipeline's sampler (a static sampler in DirectX 12)
 		const VkDescriptorSet sampler_set = active_pipeline.get_sampler_set();
 		vkCmdBindDescriptorSets(m_command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_layout, 1, 1, &sampler_set, 0, nullptr);
+
+		// Sets 2 and 3: the shader data and the frame data. Pipeline layouts
+		// differ in their push constants, so a new one may forget the sets
+		// bound before: bind them again. A shader that reads either before
+		// the frame set it reads zeros, like in the DirectX 12 backend.
+		for (uint32_t index = 0; index < k_data_slot_count; ++index)
+		{
+			const data_slot slot = static_cast<data_slot>(index);
+			if (m_has_data[index])
+			{
+				bind_data(slot);
+			}
+			else
+			{
+				set_data(slot, {});
+			}
+		}
 	}
 
 	//--------------------------------------------------------------
@@ -157,6 +191,45 @@ namespace buz::rhi
 	{
 		// Push constants: Vulkan's root constants
 		vkCmdPushConstants(m_command_buffer, m_layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, static_cast<uint32_t>(constants.size()), constants.data());
+	}
+
+	//--------------------------------------------------------------
+	bool command_list::native::set_data(data_slot slot, std::span<const std::byte> data)
+	{
+		const uint32_t size = get_data_size(slot);
+		BUZ_ASSERT_MSG(data.size() <= size, "this data must be at most {} bytes, not {}", size, data.size());
+
+		// Always the full size (see get_data_size), at an offset every
+		// Vulkan implementation accepts for a uniform buffer
+		const std::optional<device::native::scratch_allocation> scratch = m_owner->allocate_scratch(size, k_data_alignment);
+		if (!scratch)
+		{
+			return false;
+		}
+
+		std::memcpy(scratch->data, data.data(), data.size());
+		std::memset(scratch->data + data.size(), 0, size - data.size());
+
+		// Before the first set_pipeline there is no pipeline layout yet;
+		// set_pipeline binds it.
+		const uint32_t index = static_cast<uint32_t>(slot);
+		m_data_offsets[index] = static_cast<uint32_t>(scratch->offset);
+		m_has_data[index] = true;
+		if (m_layout != VK_NULL_HANDLE)
+		{
+			bind_data(slot);
+		}
+		return true;
+	}
+
+	//--------------------------------------------------------------
+	void command_list::native::bind_data(data_slot slot)
+	{
+		// Set 2 + slot, a dynamic uniform buffer over the frame's scratch
+		// memory: the offset picks the data
+		const uint32_t index = static_cast<uint32_t>(slot);
+		const VkDescriptorSet data_set = m_owner->get_data_set(slot);
+		vkCmdBindDescriptorSets(m_command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_layout, 2 + index, 1, &data_set, 1, &m_data_offsets[index]);
 	}
 
 	//--------------------------------------------------------------

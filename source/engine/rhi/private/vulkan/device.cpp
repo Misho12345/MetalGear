@@ -96,7 +96,7 @@ namespace buz::vulkan
 	}
 
 	//--------------------------------------------------------------
-	bool device::initialize(SDL_Window* window, adapter_preference preference)
+	bool device::initialize(SDL_Window* window, rhi::adapter_preference preference)
 	{
 		// volk finds the Vulkan loader the graphics driver installed and
 		// fetches its functions; no Vulkan SDK is needed to run.
@@ -123,7 +123,7 @@ namespace buz::vulkan
 		const adapter_info* selected = rhi::select_adapter(adapters, preference);
 		if (selected == nullptr)
 		{
-			log::error("{}", preference == adapter_preference::software ? "No software rasterizer found" : "No graphics card with Vulkan 1.3 support found");
+			log::error("{}", preference == rhi::adapter_preference::software ? "No software rasterizer found" : "No graphics card with Vulkan 1.3 support found");
 			return false;
 		}
 

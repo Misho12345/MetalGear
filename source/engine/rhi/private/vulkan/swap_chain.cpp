@@ -33,7 +33,7 @@ namespace
 	//--------------------------------------------------------------
 	/// @brief Picks how presenting waits: fifo waits for the monitor's
 	/// refresh (always available), immediate does not (when supported).
-	VkPresentModeKHR choose_present_mode(VkPhysicalDevice physical_device, VkSurfaceKHR surface, buz::vsync wait_for_vsync)
+	VkPresentModeKHR choose_present_mode(VkPhysicalDevice physical_device, VkSurfaceKHR surface, buz::rhi::vsync wait_for_vsync)
 	{
 		if (wait_for_vsync)
 		{
@@ -79,7 +79,7 @@ namespace buz::vulkan
 	}
 
 	//--------------------------------------------------------------
-	bool swap_chain::initialize(device& graphics_device, uint32_t width, uint32_t height, vsync wait_for_vsync)
+	bool swap_chain::initialize(device& graphics_device, uint32_t width, uint32_t height, rhi::vsync wait_for_vsync)
 	{
 		m_device = graphics_device.get_vk_device();
 		VkPhysicalDevice physical_device = graphics_device.get_physical_device();

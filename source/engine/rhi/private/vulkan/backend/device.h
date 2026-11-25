@@ -7,6 +7,7 @@
 // a fix in one shows where the other needs it too.
 
 #include "common/constants.h"
+#include "common/data_slot.h"
 #include "common/frame_scratch.h"
 #include "common/lifetime_tracker.h"
 #include "rhi/command_list.h"
@@ -86,8 +87,15 @@ namespace buz::rhi
 
 		//----------------------------------------------------------
 		/// @brief Reserves scratch memory in the frame being recorded.
+		/// @param alignment The offset is a multiple of this (see frame_scratch::allocate).
 		/// @return The allocation, or nothing when the frame's scratch is full.
-		std::optional<scratch_allocation> allocate_scratch(uint32_t size);
+		std::optional<scratch_allocation> allocate_scratch(uint32_t size, uint32_t alignment = k_frame_scratch_alignment);
+
+		//----------------------------------------------------------
+		/// @brief Returns the descriptor set of a data slot in the frame
+		/// being recorded: a dynamic uniform buffer over the frame's scratch
+		/// memory, bound at set 2 + slot with the data's offset.
+		VkDescriptorSet get_data_set(data_slot slot) const;
 
 		//----------------------------------------------------------
 		/// @brief Returns the Vulkan device, for the resources' destructors.
@@ -115,6 +123,11 @@ namespace buz::rhi
 			VmaAllocation scratch_allocation = VK_NULL_HANDLE;
 			std::byte* scratch_data = nullptr;
 			frame_scratch scratch;
+
+			// Indexed by data_slot: a dynamic uniform buffer over
+			// scratch_buffer, get_data_size(slot) bytes wide, which
+			// command_list::set_data binds at the data's offset.
+			VkDescriptorSet data_sets[k_data_slot_count] = {};
 		};
 
 		//----------------------------------------------------------
@@ -130,6 +143,12 @@ namespace buz::rhi
 		//----------------------------------------------------------
 		/// @brief Creates the two sampler sets (linear and nearest).
 		bool create_sampler_sets();
+
+		//----------------------------------------------------------
+		/// @brief Creates the set layout of the shader data and the frame
+		/// data (sets 2 and 3), and every frame's descriptor sets of them.
+		/// Called once the frames' scratch buffers exist.
+		bool create_data_sets();
 
 		//----------------------------------------------------------
 		/// @brief Creates a command pool with one command buffer in it.
@@ -151,7 +170,12 @@ namespace buz::rhi
 		VkImageView m_depth_view;
 
 		VkDescriptorPool m_sampler_pool; // holds the sampler sets
-		sampler_set m_sampler_sets[2];   // indexed by texture_filter
+		sampler_set m_sampler_sets[2];   // indexed by sampler_filter
+
+		// The shader data and the frame data (common/data_slot.h): one set
+		// layout for both, and every frame's sets in their own pool
+		VkDescriptorSetLayout m_data_layout;
+		VkDescriptorPool m_data_pool;
 
 		frame m_frames[k_frames_in_flight]; // used round robin, one per frame in flight
 		uint32_t m_frame_index;             // which of m_frames is being recorded

@@ -5,6 +5,7 @@
 build/
 build-vulkan/
 build-d3d12/
+build-package*/
 
 # Generated Doxygen html - built by CI and published to GitHub Pages
 # (https://bredauniversitygames.github.io/buz/); run docs/generate_docs.bat to
@@ -15,3 +16,6 @@ dist/
 # Games packaged with the package script
 package/
 build-web/
+
+# Python bytecode (tools/student_patch)
+__pycache__/

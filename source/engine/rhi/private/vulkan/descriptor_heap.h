@@ -35,7 +35,8 @@ namespace buz::vulkan
 
 		//----------------------------------------------------------
 		/// @brief Reserves a free descriptor slot.
-		/// @return Index of the reserved slot.
+		/// @return Index of the reserved slot. A full heap is a fatal error:
+		/// every slot is in use, and reusing one would replace a texture.
 		uint32_t allocate();
 
 		//----------------------------------------------------------

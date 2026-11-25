@@ -40,7 +40,7 @@ namespace buz::vulkan
 		/// @param height Height of the images in pixels, when the window leaves it open.
 		/// @param wait_for_vsync Whether present waits for the monitor's refresh.
 		/// @return True when the swap chain was created successfully.
-		bool initialize(device& graphics_device, uint32_t width, uint32_t height, vsync wait_for_vsync);
+		bool initialize(device& graphics_device, uint32_t width, uint32_t height, rhi::vsync wait_for_vsync);
 
 		//----------------------------------------------------------
 		/// @brief Asks for the image to render into this frame.

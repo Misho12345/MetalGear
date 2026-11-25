@@ -34,7 +34,7 @@ namespace buz::vulkan
 		/// @param window Window the device presents to (created with Vulkan support).
 		/// @param preference Whether to run on the highest or lowest scoring graphics card.
 		/// @return True when the device was created successfully.
-		bool initialize(SDL_Window* window, adapter_preference preference);
+		bool initialize(SDL_Window* window, rhi::adapter_preference preference);
 
 		//----------------------------------------------------------
 		/// @brief Returns the Vulkan instance.

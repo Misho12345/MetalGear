@@ -1,5 +1,6 @@
 #pragma once
 
+#include "common/data_slot.h"
 #include "rhi/buffer.h"
 #include "rhi/command_list.h"
 #include "rhi/device.h"
@@ -34,6 +35,7 @@ namespace buz::rhi
 		bool set_vertex_data(vertex_rate rate, std::span<const std::byte> data, uint32_t stride);
 		void set_index_buffer(const buffer::native& indices);
 		void set_constants(std::span<const std::byte> constants);
+		bool set_data(data_slot slot, std::span<const std::byte> data);
 		void set_texture(const gpu_texture::native& sampled_texture);
 		void draw(uint32_t vertex_count, uint32_t instance_count);
 		void draw_indexed(uint32_t index_count, uint32_t instance_count);
@@ -43,9 +45,18 @@ namespace buz::rhi
 		const frame_stats& get_stats() const;
 
 	private:
+		//----------------------------------------------------------
+		/// @brief Binds a data slot's set at the offset set_data stored.
+		void bind_data(data_slot slot);
+
 		device::native* m_owner;          // not owned; set by begin
 		VkCommandBuffer m_command_buffer; // not owned: the frame's command buffer
 		VkPipelineLayout m_layout;        // of the pipeline set last
 		frame_stats m_stats;              // what was recorded since begin
+
+		// Set by set_data, indexed by data_slot: the data's offset in the
+		// frame's scratch buffer, and whether the frame set it yet
+		uint32_t m_data_offsets[k_data_slot_count];
+		bool m_has_data[k_data_slot_count];
 	};
 }

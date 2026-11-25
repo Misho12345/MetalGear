@@ -14,7 +14,8 @@
 
 namespace
 {
-	// 32 bit float depth: plenty of precision, and the format both backends have
+	// 32 bit float depth: enough precision, and a format both the DirectX 12
+	// and the Vulkan backend support
 	constexpr VkFormat k_depth_format = VK_FORMAT_D32_SFLOAT;
 
 	//--------------------------------------------------------------
@@ -144,6 +145,8 @@ namespace buz::rhi
 		, m_depth_allocation(VK_NULL_HANDLE)
 		, m_depth_view(VK_NULL_HANDLE)
 		, m_sampler_pool(VK_NULL_HANDLE)
+		, m_data_layout(VK_NULL_HANDLE)
+		, m_data_pool(VK_NULL_HANDLE)
 		, m_frame_index(0)
 		, m_image_index(0)
 		, m_command_list(std::make_unique<command_list::native>())
@@ -211,6 +214,9 @@ namespace buz::rhi
 		}
 
 		vkDestroyDescriptorPool(vk_device, m_sampler_pool, nullptr);
+
+		vkDestroyDescriptorPool(vk_device, m_data_pool, nullptr);
+		vkDestroyDescriptorSetLayout(vk_device, m_data_layout, nullptr);
 	}
 
 	//--------------------------------------------------------------
@@ -299,11 +305,14 @@ namespace buz::rhi
 			}
 
 			// The frame's scratch memory: a host visible buffer, mapped once
-			// and written for as long as the backend lives.
+			// and written for as long as the backend lives. It holds vertex
+			// data (set_vertex_data) and the shader and frame data
+			// (set_shader_data, set_frame_data), which shaders read as
+			// uniform buffers.
 			const VkBufferCreateInfo scratch_info = {
 				.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
 				.size = k_frame_scratch_size,
-				.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+				.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
 			};
 
 			const VmaAllocationCreateInfo scratch_allocation_info = {
@@ -317,6 +326,11 @@ namespace buz::rhi
 				return false;
 			}
 			frame_data.scratch_data = static_cast<std::byte*>(scratch_mapping.pMappedData);
+		}
+
+		if (!create_data_sets())
+		{
+			return false;
 		}
 
 		m_rendering_done.resize(m_swap_chain.get_image_count(), VK_NULL_HANDLE);
@@ -374,17 +388,17 @@ namespace buz::rhi
 			return false;
 		}
 
-		const texture_filter filters[] = { texture_filter::linear, texture_filter::nearest };
-		for (const texture_filter filter : filters)
+		const sampler_filter filters[] = { sampler_filter::linear, sampler_filter::nearest };
+		for (const sampler_filter filter : filters)
 		{
 			sampler_set& samplers = m_sampler_sets[static_cast<size_t>(filter)];
-			const VkFilter vk_filter = filter == texture_filter::nearest ? VK_FILTER_NEAREST : VK_FILTER_LINEAR;
+			const VkFilter vk_filter = filter == sampler_filter::nearest ? VK_FILTER_NEAREST : VK_FILTER_LINEAR;
 
 			const VkSamplerCreateInfo sampler_info = {
 				.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
 				.magFilter = vk_filter,
 				.minFilter = vk_filter,
-				.mipmapMode = filter == texture_filter::nearest ? VK_SAMPLER_MIPMAP_MODE_NEAREST : VK_SAMPLER_MIPMAP_MODE_LINEAR,
+				.mipmapMode = filter == sampler_filter::nearest ? VK_SAMPLER_MIPMAP_MODE_NEAREST : VK_SAMPLER_MIPMAP_MODE_LINEAR,
 				.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
 				.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
 				.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
@@ -428,6 +442,86 @@ namespace buz::rhi
 			if (!vk::verify(vkAllocateDescriptorSets(vk_device, &allocate_info, &samplers.set), "vkAllocateDescriptorSets (sampler)"))
 			{
 				return false;
+			}
+		}
+
+		return true;
+	}
+
+	//--------------------------------------------------------------
+	bool device::native::create_data_sets()
+	{
+		VkDevice vk_device = m_device.get_vk_device();
+
+		// A dynamic uniform buffer: the set is written once, and every bind
+		// passes the offset of the data in the frame's scratch buffer. The
+		// same layout serves set 2 (shader data) and set 3 (frame data),
+		// the root parameters 2 and 3 of the DirectX 12 backend.
+		const VkDescriptorSetLayoutBinding binding = {
+			.binding = 0,
+			.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,
+			.descriptorCount = 1,
+			.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+		};
+
+		const VkDescriptorSetLayoutCreateInfo layout_info = {
+			.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+			.bindingCount = 1,
+			.pBindings = &binding,
+		};
+
+		if (!vk::verify(vkCreateDescriptorSetLayout(vk_device, &layout_info, nullptr, &m_data_layout), "vkCreateDescriptorSetLayout (data)"))
+		{
+			return false;
+		}
+
+		constexpr uint32_t set_count = k_frames_in_flight * k_data_slot_count;
+		const VkDescriptorPoolSize pool_size = { .type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, .descriptorCount = set_count };
+		const VkDescriptorPoolCreateInfo pool_info = {
+			.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+			.maxSets = set_count,
+			.poolSizeCount = 1,
+			.pPoolSizes = &pool_size,
+		};
+
+		if (!vk::verify(vkCreateDescriptorPool(vk_device, &pool_info, nullptr, &m_data_pool), "vkCreateDescriptorPool (data)"))
+		{
+			return false;
+		}
+
+		for (frame& frame_data : m_frames)
+		{
+			for (uint32_t slot = 0; slot < k_data_slot_count; ++slot)
+			{
+				const VkDescriptorSetAllocateInfo allocate_info = {
+					.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+					.descriptorPool = m_data_pool,
+					.descriptorSetCount = 1,
+					.pSetLayouts = &m_data_layout,
+				};
+
+				if (!vk::verify(vkAllocateDescriptorSets(vk_device, &allocate_info, &frame_data.data_sets[slot]), "vkAllocateDescriptorSets (data)"))
+				{
+					return false;
+				}
+
+				// The slot's full size (see get_data_size), so a shader may
+				// declare a block of any size up to it
+				const VkDescriptorBufferInfo buffer_info = {
+					.buffer = frame_data.scratch_buffer,
+					.offset = 0,
+					.range = get_data_size(static_cast<data_slot>(slot)),
+				};
+
+				const VkWriteDescriptorSet write = {
+					.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+					.dstSet = frame_data.data_sets[slot],
+					.dstBinding = 0,
+					.descriptorCount = 1,
+					.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,
+					.pBufferInfo = &buffer_info,
+				};
+				vkUpdateDescriptorSets(vk_device, 1, &write, 0, nullptr);
 			}
 		}
 
@@ -583,12 +677,13 @@ namespace buz::rhi
 		}
 
 		VkDevice vk_device = m_device.get_vk_device();
-		const sampler_set& samplers = m_sampler_sets[static_cast<size_t>(desc.sampler_filter)];
+		const sampler_set& samplers = m_sampler_sets[static_cast<size_t>(desc.filter)];
 
 		// The pipeline layout: set 0 holds the texture, set 1 the sampler,
-		// and the constants are push constants. The same layout as the root
-		// signature of the DirectX 12 backend (b0, t0, s0).
-		const VkDescriptorSetLayout set_layouts[] = { m_texture_heap.get_layout(), samplers.layout };
+		// set 2 the shader data and set 3 the frame data, and the constants
+		// are push constants. The same layout as the root signature of the
+		// DirectX 12 backend (b0, t0, s0, b1, b2).
+		const VkDescriptorSetLayout set_layouts[] = { m_texture_heap.get_layout(), samplers.layout, m_data_layout, m_data_layout };
 		const VkPushConstantRange constants_range = {
 			.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
 			.offset = 0,
@@ -597,7 +692,7 @@ namespace buz::rhi
 
 		const VkPipelineLayoutCreateInfo layout_info = {
 			.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
-			.setLayoutCount = 2,
+			.setLayoutCount = static_cast<uint32_t>(std::size(set_layouts)),
 			.pSetLayouts = set_layouts,
 			.pushConstantRangeCount = desc.constants_size > 0 ? 1u : 0u,
 			.pPushConstantRanges = &constants_range,
@@ -901,17 +996,23 @@ namespace buz::rhi
 	}
 
 	//--------------------------------------------------------------
-	std::optional<device::native::scratch_allocation> device::native::allocate_scratch(uint32_t size)
+	std::optional<device::native::scratch_allocation> device::native::allocate_scratch(uint32_t size, uint32_t alignment)
 	{
 		frame& current = m_frames[m_frame_index];
 
-		const std::optional<uint32_t> offset = current.scratch.allocate(size);
+		const std::optional<uint32_t> offset = current.scratch.allocate(size, alignment);
 		if (!offset)
 		{
 			return std::nullopt;
 		}
 
 		return scratch_allocation{ current.scratch_data + *offset, current.scratch_buffer, *offset };
+	}
+
+	//--------------------------------------------------------------
+	VkDescriptorSet device::native::get_data_set(data_slot slot) const
+	{
+		return m_frames[m_frame_index].data_sets[static_cast<uint32_t>(slot)];
 	}
 
 	//--------------------------------------------------------------

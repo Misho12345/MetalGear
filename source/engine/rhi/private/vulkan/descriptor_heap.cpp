@@ -1,6 +1,6 @@
 #include "vulkan/descriptor_heap.h"
 
-#include "core/log.h"
+#include "core/assert.h"
 #include "vulkan/vk_utils.h"
 
 namespace buz::vulkan
@@ -90,10 +90,11 @@ namespace buz::vulkan
 			return index;
 		}
 
+		// Handing out a slot that is in use would silently replace another
+		// texture on screen, so a full heap stops the program instead
 		if (m_allocated_count >= m_sets.size())
 		{
-			log::error("Descriptor heap is full (capacity: {})", m_sets.size());
-			return 0;
+			fatal_error("More than {} textures are loaded at the same time, which is all the Vulkan backend has room for. Load each texture once and share it, and let go of textures you no longer use.", m_sets.size());
 		}
 
 		return m_allocated_count++;
